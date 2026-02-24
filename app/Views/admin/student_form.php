@@ -97,15 +97,15 @@
                         <input type="file" name="photo" class="form-control" accept=".jpg,.jpeg,.png,.webp">
                     </div>
                     <div class="col-md-6">
-                        <label class="form-label">Certificates (PDF/JPG/PNG, max 5MB each)</label>
-                        <input type="file" name="certificates[]" class="form-control" multiple accept=".pdf,.jpg,.jpeg,.png">
+                        <label class="form-label">Certificates (PDF/DOC/DOCX/JPG/PNG, max 5MB each)</label>
+                        <input type="file" name="certificates[]" class="form-control" multiple accept=".pdf,.doc,.docx,.jpg,.jpeg,.png">
                     </div>
                 </div>
 
                 <?php if (! empty($student['photo'])): ?>
                     <div class="mt-3">
                         <strong>Existing Photo:</strong>
-                        <a href="<?= site_url('files/photo/view/' . $student['id']) ?>" target="_blank">View Photo</a>
+                        <a href="<?= site_url('files/photo/view/' . $student['id']) ?>" target="_blank" class="ms-2"><?= esc(basename((string) $student['photo'])) ?></a>
                     </div>
                 <?php endif; ?>
 
@@ -114,7 +114,8 @@
                         <strong>Existing Certificates:</strong>
                         <ul class="mb-0 mt-2">
                             <?php foreach ($certificates as $certificate): ?>
-                                <li><a href="<?= site_url('files/certificate/view/' . $certificate['id']) ?>" target="_blank">Certificate #<?= esc((string) $certificate['id']) ?></a></li>
+                                <?php $fileName = basename((string) $certificate['file_name']); ?>
+                                <li><a href="<?= site_url('files/certificate/view/' . $certificate['id']) ?>" target="_blank"><?= esc($fileName) ?></a></li>
                             <?php endforeach; ?>
                         </ul>
                     </div>

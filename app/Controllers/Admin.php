@@ -126,6 +126,16 @@ class Admin extends BaseController
         $this->requireAdmin();
 
         $query = trim((string) $this->request->getGet('q'));
+        $gender = trim((string) $this->request->getGet('gender'));
+        $degree = trim((string) $this->request->getGet('degree'));
+        $branch = trim((string) $this->request->getGet('branch'));
+        $sort = trim((string) $this->request->getGet('sort'));
+        $dir = strtolower(trim((string) $this->request->getGet('dir'))) === 'asc' ? 'asc' : 'desc';
+
+        $allowedSort = ['id', 'name', 'register_number', 'gender', 'degree', 'branch'];
+        if (! in_array($sort, $allowedSort, true)) {
+            $sort = 'id';
+        }
 
         $builder = $this->studentModel;
         if ($query !== '') {
@@ -140,7 +150,19 @@ class Admin extends BaseController
                 ->groupEnd();
         }
 
-        $students = $builder->orderBy('id', 'desc')->paginate(10);
+        if ($gender !== '') {
+            $builder = $builder->where('gender', $gender);
+        }
+
+        if ($degree !== '') {
+            $builder = $builder->where('degree', $degree);
+        }
+
+        if ($branch !== '') {
+            $builder = $builder->where('branch', $branch);
+        }
+
+        $students = $builder->orderBy($sort, $dir)->paginate(10, 'students');
 
         $certificateCounts = [];
         if ($students !== []) {
@@ -160,8 +182,163 @@ class Admin extends BaseController
             'students'          => $students,
             'pager'             => $this->studentModel->pager,
             'query'             => $query,
+            'gender'            => $gender,
+            'degree'            => $degree,
+            'branch'            => $branch,
+            'sort'              => $sort,
+            'dir'               => $dir,
             'certificateCounts' => $certificateCounts,
         ]);
+    }
+
+    public function exportRecords()
+    {
+        $this->requireAdmin();
+
+        $students = $this->studentModel->orderBy('id', 'asc')->findAll();
+        $certificateRows = $this->certificateModel->orderBy('id', 'asc')->findAll();
+
+        $certificatesByStudent = [];
+        foreach ($certificateRows as $certificate) {
+            $studentId = (int) ($certificate['student_id'] ?? 0);
+            if (! isset($certificatesByStudent[$studentId])) {
+                $certificatesByStudent[$studentId] = [];
+            }
+            $certificatesByStudent[$studentId][] = $certificate;
+        }
+
+        $handle = fopen('php://temp', 'r+');
+        fputcsv($handle, [
+            'name',
+            'father_name',
+            'mother_name',
+            'gender',
+            'email',
+            'phone',
+            'degree',
+            'branch',
+            'register_number',
+            'photo_file',
+            'certificate_files',
+        ]);
+
+        foreach ($students as $student) {
+            $studentId = (int) ($student['id'] ?? 0);
+            $photoFile = (string) ($student['photo'] ?? '');
+
+            $certificateFiles = [];
+            foreach ($certificatesByStudent[$studentId] ?? [] as $certificate) {
+                $fileName = (string) ($certificate['file_name'] ?? '');
+                $certificateFiles[] = $fileName;
+            }
+
+            fputcsv($handle, [
+                (string) ($student['name'] ?? ''),
+                (string) ($student['father_name'] ?? ''),
+                (string) ($student['mother_name'] ?? ''),
+                (string) ($student['gender'] ?? ''),
+                (string) ($student['email'] ?? ''),
+                (string) ($student['phone'] ?? ''),
+                (string) ($student['degree'] ?? ''),
+                (string) ($student['branch'] ?? ''),
+                (string) ($student['register_number'] ?? ''),
+                $photoFile,
+                implode(', ', $certificateFiles),
+            ]);
+        }
+
+        rewind($handle);
+        $csvData = stream_get_contents($handle);
+        fclose($handle);
+
+        return $this->response->download('student_records_' . date('Ymd_His') . '.csv', $csvData);
+    }
+
+    public function importRecordsPage()
+    {
+        $this->requireAdmin();
+
+        return view('admin/import_records');
+    }
+
+    public function downloadImportTemplate()
+    {
+        $this->requireAdmin();
+
+        $handle = fopen('php://temp', 'r+');
+        fputcsv($handle, ['name', 'father_name', 'mother_name', 'gender', 'email', 'phone', 'degree', 'branch', 'register_number']);
+        fputcsv($handle, ['John Doe', 'Raman', 'Lakshmi', 'Male', 'john@example.com', '9876543210', 'B.E', 'CSE', 'REG1001']);
+        rewind($handle);
+        $csvData = stream_get_contents($handle);
+        fclose($handle);
+
+        return $this->response->download('student_import_template.csv', $csvData);
+    }
+
+    public function importRecordsUpload()
+    {
+        $this->requireAdmin();
+
+        $file = $this->request->getFile('import_file');
+        if (! $file || ! $file->isValid() || $file->getError() === UPLOAD_ERR_NO_FILE) {
+            return redirect()->to('/admin/records/import')->with('error', 'Please select a file to upload.');
+        }
+
+        $ext = strtolower($file->getClientExtension());
+        if (! in_array($ext, ['csv', 'xlsx'], true)) {
+            return redirect()->to('/admin/records/import')->with('error', 'Only CSV and XLSX files are allowed.');
+        }
+
+        if ($ext === 'xlsx' && ! class_exists('\\PhpOffice\\PhpSpreadsheet\\IOFactory')) {
+            return redirect()->to('/admin/records/import')->with('error', 'XLSX import is not available. Please use CSV file.');
+        }
+
+        $rows = $ext === 'csv'
+            ? $this->parseCsvRows($file->getTempName())
+            : $this->parseXlsxRows($file->getTempName());
+
+        if ($rows === []) {
+            return redirect()->to('/admin/records/import')->with('error', 'No data rows found in the uploaded file.');
+        }
+
+        $inserted = 0;
+        $skipped = 0;
+
+        foreach ($rows as $row) {
+            $payload = $this->normalizeImportRow($row);
+            if (! $this->isImportRowValid($payload)) {
+                $skipped++;
+                continue;
+            }
+
+            $existsRegister = $this->studentModel->where('register_number', $payload['register_number'])->first();
+            $existsEmail = $this->studentModel->where('email', $payload['email'])->first();
+
+            if ($existsRegister || $existsEmail) {
+                $skipped++;
+                continue;
+            }
+
+            $photoFile = $this->normalizeStoredPhotoPath((string) ($row['photo_file'] ?? ''));
+            $certificateFiles = $this->normalizeStoredCertificateList((string) ($row['certificate_files'] ?? ''));
+
+            if ($photoFile !== '') {
+                $payload['photo'] = $photoFile;
+            }
+
+            $studentId = (int) $this->studentModel->insert($payload, true);
+
+            foreach ($certificateFiles as $certificateFile) {
+                $this->certificateModel->insert([
+                    'student_id' => $studentId,
+                    'file_name'  => $certificateFile,
+                ]);
+            }
+
+            $inserted++;
+        }
+
+        return redirect()->to('/admin/dashboard')->with('success', "Import completed. Added: {$inserted}, Skipped: {$skipped}.");
     }
 
     public function settings()
@@ -221,6 +398,21 @@ class Admin extends BaseController
             'action'     => site_url('admin/students/store'),
             'student'    => null,
             'validation' => session('validation'),
+        ]);
+    }
+
+    public function viewStudent(int $id)
+    {
+        $this->requireAdmin();
+
+        $student = $this->studentModel->find($id);
+        if (! $student) {
+            return redirect()->to('/admin/dashboard')->with('error', 'Student not found.');
+        }
+
+        return view('admin/student_view', [
+            'student'      => $student,
+            'certificates' => $this->certificateModel->where('student_id', $id)->findAll(),
         ]);
     }
 
@@ -456,5 +648,121 @@ class Admin extends BaseController
         }
 
         return null;
+    }
+
+    private function parseCsvRows(string $path): array
+    {
+        $rows = [];
+        $handle = fopen($path, 'rb');
+        if ($handle === false) {
+            return $rows;
+        }
+
+        $headers = null;
+        while (($data = fgetcsv($handle)) !== false) {
+            if ($headers === null) {
+                $headers = array_map(static fn ($item): string => strtolower(trim((string) $item)), $data);
+                if (isset($headers[0])) {
+                    $headers[0] = preg_replace('/^\xEF\xBB\xBF/', '', $headers[0]) ?? $headers[0];
+                }
+                continue;
+            }
+
+            if ($data === [null] || $data === []) {
+                continue;
+            }
+
+            $row = [];
+            foreach ($headers as $index => $header) {
+                $row[$header] = isset($data[$index]) ? trim((string) $data[$index]) : '';
+            }
+            $rows[] = $row;
+        }
+
+        fclose($handle);
+        return $rows;
+    }
+
+    private function parseXlsxRows(string $path): array
+    {
+        $rows = [];
+        $reader = \PhpOffice\PhpSpreadsheet\IOFactory::createReaderForFile($path);
+        $spreadsheet = $reader->load($path);
+        $sheet = $spreadsheet->getActiveSheet();
+        $data = $sheet->toArray(null, true, true, false);
+
+        if ($data === [] || count($data) < 2) {
+            return $rows;
+        }
+
+        $headers = array_map(static fn ($item): string => strtolower(trim((string) $item)), $data[0]);
+        foreach (array_slice($data, 1) as $line) {
+            $row = [];
+            foreach ($headers as $index => $header) {
+                $row[$header] = isset($line[$index]) ? trim((string) $line[$index]) : '';
+            }
+            $rows[] = $row;
+        }
+
+        return $rows;
+    }
+
+    private function normalizeImportRow(array $row): array
+    {
+        return [
+            'name'            => trim((string) ($row['name'] ?? '')),
+            'father_name'     => trim((string) ($row['father_name'] ?? '')),
+            'mother_name'     => trim((string) ($row['mother_name'] ?? '')),
+            'gender'          => trim((string) ($row['gender'] ?? '')),
+            'email'           => trim((string) ($row['email'] ?? '')),
+            'phone'           => trim((string) ($row['phone'] ?? '')),
+            'degree'          => trim((string) ($row['degree'] ?? '')),
+            'branch'          => trim((string) ($row['branch'] ?? '')),
+            'register_number' => trim((string) ($row['register_number'] ?? '')),
+        ];
+    }
+
+    private function isImportRowValid(array $payload): bool
+    {
+        $validGender = in_array($payload['gender'], ['Male', 'Female', 'Other'], true);
+        $validDegree = in_array($payload['degree'], ['B.E', 'B.Tech', 'M.E', 'M.Tech'], true);
+        $validBranch = in_array($payload['branch'], ['CSE', 'IT', 'ECE', 'EEE', 'Civil', 'Mech'], true);
+
+        return $payload['name'] !== ''
+            && $payload['father_name'] !== ''
+            && $payload['mother_name'] !== ''
+            && $validGender
+            && $payload['email'] !== ''
+            && filter_var($payload['email'], FILTER_VALIDATE_EMAIL) !== false
+            && $payload['phone'] !== ''
+            && $validDegree
+            && $validBranch
+            && $payload['register_number'] !== '';
+    }
+
+    private function normalizeStoredPhotoPath(string $value): string
+    {
+        $value = trim($value);
+        if ($value === '') {
+            return '';
+        }
+
+        return str_contains($value, '/') ? $value : 'photos/' . $value;
+    }
+
+    private function normalizeStoredCertificateList(string $value): array
+    {
+        $value = trim($value);
+        if ($value === '') {
+            return [];
+        }
+
+        $items = array_filter(array_map('trim', explode(',', $value)));
+        $normalized = [];
+        foreach ($items as $item) {
+            $normalized[] = str_contains($item, '/') ? $item : 'certificates/' . $item;
+        }
+
+        return $normalized;
     }
 }

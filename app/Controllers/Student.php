@@ -64,11 +64,13 @@ class Student extends BaseController
     public function profile()
     {
         $student = $this->requireStudent();
+        $isEdit = $this->request->getGet('edit') === '1';
 
         return view('student/profile', [
             'student'      => $student,
             'certificates' => $this->certificateModel->where('student_id', $student['id'])->findAll(),
             'validation'   => session('validation'),
+            'isEdit'       => $isEdit,
         ]);
     }
 
@@ -88,19 +90,19 @@ class Student extends BaseController
         ];
 
         if (! $this->validate($rules)) {
-            return redirect()->to('/student/profile')->withInput()->with('validation', $this->validator);
+            return redirect()->to('/student/profile?edit=1')->withInput()->with('validation', $this->validator);
         }
 
         $photo = $this->request->getFile('photo');
         $certificates = $this->extractUploadedCertificates($this->request->getFiles()['certificates'] ?? []);
 
         if ($photo && $photo->isValid() && ! $photo->hasMoved() && ! $this->filesController->isValidPhoto($photo)) {
-            return redirect()->to('/student/profile')->withInput()->with('error', 'Invalid photo format or size.');
+            return redirect()->to('/student/profile?edit=1')->withInput()->with('error', 'Invalid photo format or size.');
         }
 
         foreach ($certificates as $certificate) {
             if (! $this->filesController->isValidCertificate($certificate)) {
-                return redirect()->to('/student/profile')->withInput()->with('error', 'One or more certificate files are invalid.');
+                return redirect()->to('/student/profile?edit=1')->withInput()->with('error', 'One or more certificate files are invalid.');
             }
         }
 

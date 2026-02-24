@@ -76,7 +76,7 @@ class Files extends BaseController
 
         foreach ($certificates as $certificate) {
             if (! $certificate->isValid() || ! $this->isValidCertificate($certificate)) {
-                return redirect()->back()->with('error', 'Certificates must be PDF, JPG, JPEG, or PNG and below 5 MB each.');
+                return redirect()->back()->with('error', 'Certificates must be PDF, DOC, DOCX, JPG, JPEG, or PNG and below 5 MB each.');
             }
         }
 
@@ -138,9 +138,19 @@ class Files extends BaseController
 
     public function isValidCertificate(UploadedFile $file): bool
     {
-        $allowedMime = ['application/pdf', 'image/jpeg', 'image/jpg', 'image/png'];
+        $allowedMime = [
+            'application/pdf',
+            'image/jpeg',
+            'image/jpg',
+            'image/png',
+            'application/msword',
+            'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        ];
+        $allowedExt = ['pdf', 'jpg', 'jpeg', 'png', 'doc', 'docx'];
 
-        return in_array($file->getMimeType(), $allowedMime, true) && $file->getSizeByUnit('mb') <= 5;
+        return in_array(strtolower($file->getExtension()), $allowedExt, true)
+            && in_array($file->getMimeType(), $allowedMime, true)
+            && $file->getSizeByUnit('mb') <= 5;
     }
 
     public function storePhotoFile(UploadedFile $file): string
